@@ -159,6 +159,142 @@ def get_resultados_df():
     conn.close()
     return df
 
+def extrair_nome_candidato(candidato_completo):
+    """
+    Extrai apenas o nome do candidato (antes do parêntese).
+    
+    Args:
+        candidato_completo: String no formato "Nome (Instituição - Região)"
+    
+    Returns:
+        str: Nome do candidato sem instituição/região
+    """
+    if '(' in candidato_completo:
+        return candidato_completo.split('(')[0].strip()
+    return candidato_completo.strip()
+
+def gerar_csv_votos_formatado(df_votos):
+    """
+    Converte DataFrame de votos para formato com colunas por candidato.
+    
+    Args:
+        df_votos: DataFrame com colunas user_id, escolhas, timestamp
+    
+    Returns:
+        DataFrame: DataFrame formatado com colunas por candidato (1/0) e linha TOTAL
+    """
+    try:
+        # Lê lista completa de candidatos primeiro (necessário mesmo sem votos)
+        df_candidatos = ler_csv_candidatos()
+        
+        # Se não houver votos, retorna DataFrame vazio com apenas cabeçalho
+        if df_votos.empty:
+            # Cria lista formatada "Nome (Instituição - Região)" e extrai apenas nomes
+            opcoes_completas = df_candidatos.apply(
+                lambda x: f"{x['Nome']} ({x['Instituicao']} - {x['Regiao']})", 
+                axis=1
+            ).tolist()
+            nomes_candidatos = [extrair_nome_candidato(opcao) for opcao in opcoes_completas]
+            colunas = ['user_id', 'timestamp'] + sorted(nomes_candidatos) + ['Total_Votos_Eleitor']
+            return pd.DataFrame(columns=colunas)
+        
+        # Cria lista formatada "Nome (Instituição - Região)" e extrai apenas nomes
+        opcoes_completas = df_candidatos.apply(
+            lambda x: f"{x['Nome']} ({x['Instituicao']} - {x['Regiao']})", 
+            axis=1
+        ).tolist()
+        
+        # Extrai apenas os nomes dos candidatos para usar como colunas
+        nomes_candidatos = [extrair_nome_candidato(opcao) for opcao in opcoes_completas]
+        
+        # Cria dicionário para mapear nome completo -> nome simples
+        mapeamento_nomes = {
+            opcao_completa: nome_simples 
+            for opcao_completa, nome_simples in zip(opcoes_completas, nomes_candidatos)
+        }
+        
+        # Cria lista de dados para o novo DataFrame
+        dados_formatados = []
+        
+        # Processa cada voto
+        for _, row in df_votos.iterrows():
+            user_id = row['user_id']
+            timestamp = row['timestamp']
+            escolhas_str = row['escolhas']
+            
+            # Separa as escolhas
+            escolhas_lista = [e.strip() for e in escolhas_str.split(',')] if escolhas_str else []
+            
+            # Cria dicionário para esta linha
+            linha = {
+                'user_id': user_id,
+                'timestamp': timestamp
+            }
+            
+            # Inicializa todas as colunas de candidatos com 0
+            for nome_candidato in nomes_candidatos:
+                linha[nome_candidato] = 0
+            
+            # Marca 1 para os candidatos votados
+            for escolha in escolhas_lista:
+                escolha_limpa = escolha.strip()
+                # Tenta encontrar o nome correspondente
+                nome_correspondente = None
+                for opcao_completa, nome_simples in mapeamento_nomes.items():
+                    if escolha_limpa == opcao_completa:
+                        nome_correspondente = nome_simples
+                        break
+                
+                if nome_correspondente and nome_correspondente in linha:
+                    linha[nome_correspondente] = 1
+            
+            # Calcula Total_Votos_Eleitor (soma de todas as colunas de candidatos)
+            linha['Total_Votos_Eleitor'] = sum(
+                linha[nome_candidato] for nome_candidato in nomes_candidatos
+            )
+            
+            dados_formatados.append(linha)
+        
+        # Cria DataFrame
+        df_formatado = pd.DataFrame(dados_formatados)
+        
+        # Se não houver dados, retorna DataFrame vazio com apenas cabeçalho
+        if df_formatado.empty:
+            colunas = ['user_id', 'timestamp'] + nomes_candidatos + ['Total_Votos_Eleitor']
+            return pd.DataFrame(columns=colunas)
+        
+        # Reordena colunas: user_id, timestamp, candidatos (em ordem alfabética), Total_Votos_Eleitor
+        colunas_ordenadas = ['user_id', 'timestamp'] + sorted(nomes_candidatos) + ['Total_Votos_Eleitor']
+        # Garante que todas as colunas existem
+        colunas_ordenadas = [col for col in colunas_ordenadas if col in df_formatado.columns]
+        df_formatado = df_formatado[colunas_ordenadas]
+        
+        # Adiciona linha TOTAL
+        linha_total = {
+            'user_id': 'TOTAL',
+            'timestamp': ''
+        }
+        
+        # Soma de votos por candidato
+        for nome_candidato in sorted(nomes_candidatos):
+            if nome_candidato in df_formatado.columns:
+                linha_total[nome_candidato] = df_formatado[nome_candidato].sum()
+        
+        # Total_Votos_Eleitor na linha TOTAL = soma total de todos os votos
+        linha_total['Total_Votos_Eleitor'] = df_formatado['Total_Votos_Eleitor'].sum()
+        
+        # Adiciona linha TOTAL ao DataFrame
+        df_total = pd.DataFrame([linha_total])
+        df_formatado = pd.concat([df_formatado, df_total], ignore_index=True)
+        
+        return df_formatado
+        
+    except Exception as e:
+        # Em caso de erro, retorna DataFrame original
+        if 'st.error' in dir():
+            st.error(f"Erro ao formatar CSV de votos: {e}")
+        return df_votos
+
 def fazer_backup_votacao():
     """Faz backup do CSV de votos e banco de dados com timestamp."""
     try:
@@ -171,8 +307,9 @@ def fazer_backup_votacao():
         
         # Backup do CSV de votos (sempre salva, mesmo se vazio)
         df_votos = get_resultados_df()
+        df_votos_formatado = gerar_csv_votos_formatado(df_votos)
         backup_csv_path = backup_dir / f'backup_votos_{timestamp}.csv'
-        df_votos.to_csv(backup_csv_path, index=False, encoding='utf-8')
+        df_votos_formatado.to_csv(backup_csv_path, index=False, encoding='utf-8')
         
         # Backup do banco de dados
         if os.path.exists(DB_FILE):
@@ -181,7 +318,10 @@ def fazer_backup_votacao():
         
         return timestamp
     except Exception as e:
-        st.error(f"Erro ao fazer backup: {e}")
+        if 'st.error' in dir():
+            st.error(f"Erro ao fazer backup: {e}")
+        else:
+            print(f"Erro ao fazer backup: {e}")
         return None
 
 def resetar_votacao():
@@ -919,9 +1059,10 @@ def main():
                 # Download dos dados
                 col_dl1, col_dl2 = st.columns(2)
                 with col_dl1:
+                    df_votos_formatado = gerar_csv_votos_formatado(df_votos)
                     st.download_button(
                         label="📥 Baixar CSV de Votos",
-                        data=df_votos.to_csv(index=False).encode('utf-8'),
+                        data=df_votos_formatado.to_csv(index=False).encode('utf-8'),
                         file_name='auditoria_votos_ceie.csv',
                         mime='text/csv',
                     )
