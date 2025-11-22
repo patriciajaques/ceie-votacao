@@ -1,0 +1,118 @@
+---
+description: Regras de idioma e padrões de código para o projeto
+globs: ["**/*.py", "**/*.js", "**/*.ts", "**/*.md"]
+alwaysApply: true
+---
+
+
+# Regras de Idioma
+
+## Comunicação
+
+- **Comunicação com o usuário**: sempre em português
+- **Mensagens exibidas para o usuário** (prints, logs, mensagens de erro): português
+- **Textos de interface do usuário**: português
+
+## Código e Documentação
+
+- **Documentação de código** (docstrings, comentários): inglês
+- **Nomes de identificadores** (variáveis, classes, funções, métodos): inglês
+- **Convenções de nomenclatura**: seguir padrões internacionais
+
+# Coding Standards
+
+## Naming Conventions
+
+### Files and Directories
+
+- Use `snake_case` for file and directory names
+- File names should reflect the main class name (e.g., `benchmark_controller.py` for `BenchmarkController`)
+
+### Python Code
+
+- `snake_case` for variables, functions, and modules
+- `PascalCase` for classes
+- `UPPER_CASE` for constants
+- Descriptive and self-explanatory names
+
+## Documentation
+
+### Docstrings
+
+```python
+def process_document(
+    document_path: str,
+    company_code: str
+) -> Dict[str, Any]:
+    """
+    Process an ESG report document.
+
+    Args:
+        document_path: Path to the document file
+        company_code: Company code
+
+    Returns:
+        Dictionary containing processed sections
+
+    Raises:
+        DocumentProcessingError: If processing fails
+    """
+```
+
+### Comments
+
+- Comments in English
+- Explain the "why" not the "what"
+- Keep comments up to date
+
+## Type Hints
+
+- Use type hints in all functions
+- Define types for parameters and returns
+- Use `Any` only when necessary
+
+## Code Organization
+
+- Maximum 79 characters per line
+- 4 spaces for indentation
+- Whitespace after commas
+- Blank line between functions and classes
+- Import order:
+  1. Standard library
+  2. Third-party
+  3. Local application
+
+### Import Statements
+
+- **Always use absolute imports with full paths starting from `src.`**
+- Use complete module paths (e.g., `from src.config.config_manager import ConfigManager`)
+- Never use relative imports (e.g., avoid `from ..config import config_manager`)
+- Never use imports without the `src.` prefix (e.g., avoid `from config.config_manager import ConfigManager`)
+- **Never modify `sys.path` for imports** - Python automatically adds the script's directory to `sys.path`, so imports with `src.` work without path manipulation
+  - When executing scripts from project root, imports like `from src.module import Class` work directly
+  - No need for `sys.path.insert()` or `sys.path.append()` in most cases
+- **Examples**:
+  - ✅ `from src.config.config_manager import ConfigManager`
+  - ✅ `from src.scraper.extractors.utils import make_request`
+  - ❌ `from config.config_manager import ConfigManager`
+  - ❌ `from ..extractors.utils import make_request`
+  - ❌ `from .config_manager import ConfigManager`
+  - ❌ `sys.path.insert(0, str(Path(__file__).parent))`  # Unnecessary
+  - ❌ `sys.path.insert(0, str(Path(__file__).parent / 'src'))`  # Never needed
+
+## Git Commit Messages
+
+- **Language**: Always in English
+- **Format**: Follow Conventional Commits specification
+- **Style**: Concise and descriptive
+- **Structure**: `type: description`
+  - `feat`: New feature
+  - `fix`: Bug fix
+  - `refactor`: Code refactoring
+  - `docs`: Documentation changes
+  - `test`: Test-related changes
+  - `chore`: Maintenance tasks
+- **Examples**:
+  - `feat: add checkpoint validation system`
+  - `fix: resolve memory leak in data processing`
+  - `refactor: centralize checkpoint files in organized structure`
