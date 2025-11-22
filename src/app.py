@@ -412,7 +412,8 @@ def init_dropbox_client():
         return None
     
     try:
-        client = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
+        # Usa oauth2_access_token explicitamente para evitar tentativas de refresh
+        client = dropbox.Dropbox(oauth2_access_token=DROPBOX_ACCESS_TOKEN)
         # Testa a conexão
         client.users_get_current_account()
         return client
