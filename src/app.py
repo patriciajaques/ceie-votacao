@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import shutil
 from pathlib import Path
@@ -335,22 +335,77 @@ def verificar_e_restaurar_db():
         # Verifica se banco local existe e tem dados
         banco_local_existe = os.path.exists(DB_FILE)
         banco_local_tem_dados = False
+        timestamp_local = None
         
         if banco_local_existe:
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             c.execute("SELECT COUNT(*) FROM votos")
             count = c.fetchone()[0]
-            conn.close()
             banco_local_tem_dados = count > 0
+            
+            # Lê timestamp do último upload local
+            c.execute("SELECT valor FROM config WHERE chave='ultimo_upload_dropbox'")
+            result = c.fetchone()
+            if result and result[0] and result[0].strip():
+                try:
+                    timestamp_local = datetime.fromisoformat(result[0])
+                except (ValueError, TypeError):
+                    timestamp_local = None
+            conn.close()
         
         # Se banco local não tem dados, tenta restaurar do Dropbox
         if not banco_local_tem_dados:
             if download_db_from_dropbox():
                 return True
         
-        # Se ambos existem, compara timestamps (opcional - pode ser implementado depois)
-        # Por enquanto, se local tem dados, mantém local
+        # Se banco local tem dados, compara com Dropbox
+        # Verifica se arquivo existe no Dropbox e compara timestamps
+        try:
+            # Obtém metadata do arquivo no Dropbox
+            metadata = client.files_get_metadata(DROPBOX_FILE_PATH)
+            timestamp_dropbox = None
+            
+            # Tenta obter timestamp do arquivo no Dropbox
+            if hasattr(metadata, 'server_modified'):
+                # server_modified é datetime object no Dropbox SDK
+                timestamp_dropbox = metadata.server_modified
+            elif hasattr(metadata, 'client_modified'):
+                timestamp_dropbox = metadata.client_modified
+            
+            # Se não tem timestamp local, sempre restaura do Dropbox para garantir sincronização
+            if timestamp_local is None:
+                if download_db_from_dropbox():
+                    return True
+            
+            # Se ambos têm timestamps, compara
+            if timestamp_dropbox and timestamp_local:
+                # Converte timestamp_dropbox para timezone-aware se necessário
+                if timestamp_dropbox.tzinfo is None:
+                    # Assume UTC se não tiver timezone
+                    timestamp_dropbox = timestamp_dropbox.replace(tzinfo=timezone.utc)
+                
+                if timestamp_local.tzinfo is None:
+                    timestamp_local = timestamp_local.replace(tzinfo=timezone.utc)
+                
+                # Se Dropbox é mais recente, restaura
+                if timestamp_dropbox > timestamp_local:
+                    if download_db_from_dropbox():
+                        return True
+        except ApiError as e:
+            # Se arquivo não existe no Dropbox, mantém local
+            if not (e.error.is_path() and e.error.get_path().is_not_found()):
+                # Outro erro, loga mas não interrompe
+                if 'st.error' in dir():
+                    st.error(f"Erro ao verificar arquivo no Dropbox: {e}")
+        except Exception as e:
+            # Erro ao comparar, se não tem timestamp local, tenta restaurar para garantir
+            if timestamp_local is None:
+                if download_db_from_dropbox():
+                    return True
+            # Se houver erro e já tem timestamp local, mantém local mas loga
+            if 'st.error' in dir():
+                st.error(f"Erro ao comparar timestamps: {e}")
         
         return False
     except Exception as e:
@@ -952,41 +1007,55 @@ def main():
                     except Exception as e:
                         st.error(f"Erro ao processar CSV de candidatos: {e}")
             
-            # Botão para iniciar nova votação
-            if st.button("🔄 Iniciar Nova Votação", type="primary"):
-                # Valida se ambos os CSVs foram fornecidos
-                if novo_eleitores_df is None or novo_candidatos_df is None:
-                    st.error("Por favor, forneça ambos os CSVs (eleitores e candidatos).")
+            # Verifica se ambos os CSVs foram fornecidos para habilitar/desabilitar botão
+            csvs_fornecidos = (novo_eleitores_df is not None and novo_candidatos_df is not None)
+            
+            # Botão para iniciar nova votação (desabilitado se não houver CSVs)
+            if st.button(
+                "🔄 Iniciar Nova Votação", 
+                type="primary",
+                disabled=not csvs_fornecidos
+            ):
+                # Valida os CSVs
+                valido_eleitores, erro_eleitores = validar_csv_eleitores(novo_eleitores_df)
+                valido_candidatos, erro_candidatos = validar_csv_candidatos(novo_candidatos_df)
+                
+                if not valido_eleitores:
+                    st.error(f"Erro na validação de eleitores: {erro_eleitores}")
+                elif not valido_candidatos:
+                    st.error(f"Erro na validação de candidatos: {erro_candidatos}")
                 else:
-                    # Valida os CSVs
-                    valido_eleitores, erro_eleitores = validar_csv_eleitores(novo_eleitores_df)
-                    valido_candidatos, erro_candidatos = validar_csv_candidatos(novo_candidatos_df)
-                    
-                    if not valido_eleitores:
-                        st.error(f"Erro na validação de eleitores: {erro_eleitores}")
-                    elif not valido_candidatos:
-                        st.error(f"Erro na validação de candidatos: {erro_candidatos}")
+                    # Faz reset da votação (backup + deleta votos)
+                    if resetar_votacao():
+                        # Salva novos CSVs
+                        try:
+                            # Salva como arquivos locais
+                            novo_eleitores_df.to_csv(ARQUIVO_ELEITORES, index=False, encoding='utf-8')
+                            novo_candidatos_df.to_csv(ARQUIVO_CANDIDATOS, index=False, encoding='utf-8')
+                            
+                            # Limpa estados de sessão relacionados a votos
+                            keys_to_delete = [key for key in st.session_state.keys() if 'checkbox' in key or 'voto' in key]
+                            for key in keys_to_delete:
+                                del st.session_state[key]
+                            
+                            # Marca que nova votação foi iniciada com sucesso
+                            st.session_state.nova_votacao_iniciada = True
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao salvar novos CSVs: {e}")
                     else:
-                        # Faz reset da votação (backup + deleta votos)
-                        if resetar_votacao():
-                            # Salva novos CSVs
-                            try:
-                                # Salva como arquivos locais
-                                novo_eleitores_df.to_csv(ARQUIVO_ELEITORES, index=False, encoding='utf-8')
-                                novo_candidatos_df.to_csv(ARQUIVO_CANDIDATOS, index=False, encoding='utf-8')
-                                
-                                # Limpa estados de sessão relacionados a votos
-                                keys_to_delete = [key for key in st.session_state.keys() if 'checkbox' in key or 'voto' in key]
-                                for key in keys_to_delete:
-                                    del st.session_state[key]
-                                
-                                st.success("✅ Nova votação iniciada com sucesso! Backup automático realizado.")
-                                st.balloons()
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao salvar novos CSVs: {e}")
-                        else:
-                            st.error("Erro ao resetar votação. Verifique os logs.")
+                        st.error("Erro ao resetar votação. Verifique os logs.")
+            
+            # Exibe mensagem de confirmação se nova votação foi iniciada
+            if st.session_state.get('nova_votacao_iniciada', False):
+                st.success("✅ **Nova votação iniciada com sucesso!** Backup automático realizado.")
+                st.balloons()
+                # Remove a flag após exibir a mensagem (para não aparecer em reruns futuros)
+                del st.session_state.nova_votacao_iniciada
+            
+            # Exibe aviso se CSVs não foram fornecidos
+            if not csvs_fornecidos:
+                st.warning("⚠️ Por favor, forneça ambos os CSVs (eleitores e candidatos) antes de iniciar uma nova votação.")
             
             return
         
