@@ -67,6 +67,11 @@ ceie_votacao/
 EMAIL_ADMIN = "admin"
 PASSWORD_ADMIN = "sua_senha_admin_aqui"
 MAX_SELECTIONS = 3
+
+# Dropbox Configuration (opcional - para backup automático)
+[DROPBOX]
+ACCESS_TOKEN = "seu_token_dropbox_aqui"
+FOLDER = "/CEIE_Votacao_Backups"  # Opcional: pasta onde o backup será salvo
 ```
 
 ### 4. Configurar Arquivos CSV via Secrets
@@ -101,6 +106,12 @@ Nome,Instituicao,Regiao
 Prof. Dr. Carlos Mendes,Universidade Federal do Rio de Janeiro,Sudeste
 ...
 """
+
+# Dropbox Configuration (opcional - para backup automático)
+# Veja DROPBOX_SETUP.md para instruções de como obter o ACCESS_TOKEN
+[DROPBOX]
+ACCESS_TOKEN = "seu_token_dropbox_aqui"
+FOLDER = "/CEIE_Votacao_Backups"  # Opcional: pasta onde o backup será salvo
 ```
 
 **Nota:** O código já está preparado para ler dos secrets quando os arquivos não existirem localmente.
@@ -132,7 +143,9 @@ O código já está preparado para:
 
 - O banco de dados `votos.db` será criado automaticamente na primeira execução
 - Os CSVs devem ser configurados via Secrets ou carregados de outra fonte segura
-- O Streamlit Cloud reinicia a aplicação após inatividade, mas o banco persiste
+- **Backup Automático**: Se configurar Dropbox, o banco será automaticamente restaurado se a aplicação reiniciar
+- O Streamlit Cloud reinicia a aplicação após inatividade, mas com Dropbox configurado, os dados são preservados
+- Consulte `DROPBOX_SETUP.md` para instruções detalhadas sobre configuração do Dropbox
 
 ## 🆘 Troubleshooting
 
