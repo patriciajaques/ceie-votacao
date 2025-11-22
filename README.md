@@ -23,8 +23,8 @@ Sistema de votação eletrônica desenvolvido com Streamlit para a Comissão Esp
 
 1. Clone o repositório:
 ```bash
-git clone <url-do-repositorio>
-cd ceie_votacao
+git clone https://github.com/patriciajaques/ceie-votacao.git
+cd ceie-votacao
 ```
 
 2. Ative o ambiente Conda:
@@ -94,3 +94,7 @@ ceie_votacao/
 ## 👥 Desenvolvido para
 
 Comissão Especial de Informática na Educação (CEIE)
+
+## 📄 Licença
+
+Este projeto está licenciado sob a [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](LICENSE).
