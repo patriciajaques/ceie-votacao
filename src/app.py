@@ -1,14 +1,23 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import shutil
 from pathlib import Path
-from io import StringIO
+from io import StringIO, BytesIO
 from PIL import Image
 import numpy as np
 from collections import Counter
+import json
+
+# Dropbox API imports
+try:
+    import dropbox
+    from dropbox.exceptions import ApiError, AuthError
+    DROPBOX_AVAILABLE = True
+except ImportError:
+    DROPBOX_AVAILABLE = False
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="Eleição CEIE", page_icon="🗳️", layout="centered")
@@ -21,6 +30,15 @@ EMAIL_ADMIN = st.secrets.get("EMAIL_ADMIN", "admin@ceie.com")
 SENHA_ADMIN = st.secrets.get("PASSWORD_ADMIN", "admin123")
 MAX_SELECTIONS = int(st.secrets.get("MAX_SELECTIONS", 3))
 LOGO_PATH = Path('logo')
+
+# Dropbox Configuration
+DROPBOX_CONFIG = st.secrets.get("DROPBOX", {})
+DROPBOX_ACCESS_TOKEN = DROPBOX_CONFIG.get("ACCESS_TOKEN", "")
+DROPBOX_FOLDER = DROPBOX_CONFIG.get("FOLDER", "/CEIE Votacao Backups")  # Pasta no Dropbox
+DROPBOX_FILE_NAME = "votos_ceie.db"  # Nome do arquivo
+# Caminho completo: pasta + arquivo
+DROPBOX_FILE_PATH = f"{DROPBOX_FOLDER.rstrip('/')}/{DROPBOX_FILE_NAME}"
+UPLOAD_INTERVAL_MINUTES = 15  # Intervalo para upload periódico
 
 # --- Funções Auxiliares para Leitura de CSVs ---
 def ler_csv_eleitores():
@@ -85,6 +103,9 @@ def init_db():
     # Define estado inicial como ABERTO se não existir
     c.execute("INSERT OR IGNORE INTO config (chave, valor) VALUES ('status', 'ABERTO')")
     
+    # Inicializa campo de último upload do Dropbox (se não existir)
+    c.execute("INSERT OR IGNORE INTO config (chave, valor) VALUES ('ultimo_upload_dropbox', '')")
+    
     conn.commit()
     conn.close()
 
@@ -99,6 +120,9 @@ def set_voting_status(new_status):
     conn.cursor().execute("UPDATE config SET valor = ? WHERE chave='status'", (new_status,))
     conn.commit()
     conn.close()
+    
+    # Upload imediato para Dropbox ao mudar status
+    upload_db_to_dropbox()
 
 def registrar_voto(user_id, escolhas_lista):
     conn = sqlite3.connect(DB_FILE)
@@ -117,6 +141,9 @@ def registrar_voto(user_id, escolhas_lista):
     
     conn.commit()
     conn.close()
+    
+    # Verifica se precisa fazer upload periódico para Dropbox
+    verificar_upload_periodico()
 
 def carregar_voto_existente(user_id):
     conn = sqlite3.connect(DB_FILE)
@@ -175,9 +202,209 @@ def resetar_votacao():
         # Reseta status para ABERTO
         set_voting_status('ABERTO')
         
+        # Upload imediato para Dropbox após reset
+        upload_db_to_dropbox()
+        
         return True
     except Exception as e:
         st.error(f"Erro ao resetar votação: {e}")
+        return False
+
+# --- Funções de Integração com Dropbox ---
+def init_dropbox_client():
+    """
+    Inicializa cliente do Dropbox usando Access Token.
+    
+    Returns:
+        dropbox.Dropbox: Cliente do Dropbox ou None se não configurado
+    """
+    if not DROPBOX_AVAILABLE:
+        return None
+    
+    if not DROPBOX_ACCESS_TOKEN:
+        return None
+    
+    try:
+        client = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
+        # Testa a conexão
+        client.users_get_current_account()
+        return client
+    except AuthError:
+        if 'st.error' in dir():
+            st.error("Erro de autenticação do Dropbox. Verifique o ACCESS_TOKEN.")
+        return None
+    except Exception as e:
+        if 'st.error' in dir():
+            st.error(f"Erro ao inicializar Dropbox: {e}")
+        return None
+
+def upload_db_to_dropbox():
+    """
+    Faz upload do banco de dados para Dropbox.
+    Cria a pasta se não existir, atualiza arquivo existente ou cria novo.
+    Salva timestamp do upload na tabela config.
+    
+    Returns:
+        bool: True se upload foi bem-sucedido, False caso contrário
+    """
+    if not os.path.exists(DB_FILE):
+        return False
+    
+    client = init_dropbox_client()
+    if not client:
+        return False
+    
+    try:
+        # Lê o arquivo
+        with open(DB_FILE, 'rb') as f:
+            file_data = f.read()
+        
+        # Faz upload (sobrescreve se já existir)
+        # Nota: A pasta deve existir no Dropbox ou o app precisa ter permissão para criar pastas
+        client.files_upload(
+            file_data,
+            DROPBOX_FILE_PATH,
+            mode=dropbox.files.WriteMode.overwrite
+        )
+        
+        # Salva timestamp do upload na tabela config
+        timestamp = datetime.now().isoformat()
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            "INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)",
+            ('ultimo_upload_dropbox', timestamp)
+        )
+        conn.commit()
+        conn.close()
+        
+        return True
+    except Exception as e:
+        if 'st.error' in dir():
+            st.error(f"Erro ao fazer upload para Dropbox: {e}")
+        else:
+            # Se não estiver no contexto do Streamlit, imprime o erro
+            print(f"Erro ao fazer upload para Dropbox: {e}")
+            import traceback
+            traceback.print_exc()
+        return False
+
+def download_db_from_dropbox():
+    """
+    Baixa banco de dados do Dropbox.
+    Substitui arquivo local se download for bem-sucedido.
+    
+    Returns:
+        bool: True se download foi bem-sucedido, False caso contrário
+    """
+    client = init_dropbox_client()
+    if not client:
+        return False
+    
+    try:
+        # Tenta baixar o arquivo
+        metadata, response = client.files_download(DROPBOX_FILE_PATH)
+        
+        # Salva arquivo localmente
+        with open(DB_FILE, 'wb') as f:
+            f.write(response.content)
+        
+        return True
+    except ApiError as e:
+        if e.error.is_path() and e.error.get_path().is_not_found():
+            # Arquivo não existe no Dropbox
+            return False
+        if 'st.error' in dir():
+            st.error(f"Erro ao baixar do Dropbox: {e}")
+        return False
+    except Exception as e:
+        if 'st.error' in dir():
+            st.error(f"Erro ao baixar do Dropbox: {e}")
+        return False
+
+def verificar_e_restaurar_db():
+    """
+    Verifica se precisa restaurar banco do Dropbox na inicialização.
+    Restaura se banco local estiver vazio ou mais antigo que o do Dropbox.
+    """
+    client = init_dropbox_client()
+    if not client:
+        return False
+    
+    try:
+        # Verifica se banco local existe e tem dados
+        banco_local_existe = os.path.exists(DB_FILE)
+        banco_local_tem_dados = False
+        
+        if banco_local_existe:
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM votos")
+            count = c.fetchone()[0]
+            conn.close()
+            banco_local_tem_dados = count > 0
+        
+        # Se banco local não tem dados, tenta restaurar do Dropbox
+        if not banco_local_tem_dados:
+            if download_db_from_dropbox():
+                return True
+        
+        # Se ambos existem, compara timestamps (opcional - pode ser implementado depois)
+        # Por enquanto, se local tem dados, mantém local
+        
+        return False
+    except Exception as e:
+        if 'st.error' in dir():
+            st.error(f"Erro ao verificar/restaurar banco: {e}")
+        return False
+
+def verificar_upload_periodico():
+    """
+    Verifica se precisa fazer upload periódico (a cada 15 minutos).
+    Faz upload se passou o intervalo E há votos novos.
+    
+    Returns:
+        bool: True se upload foi feito, False caso contrário
+    """
+    client = init_dropbox_client()
+    if not client:
+        return False
+    
+    try:
+        # Verifica se há votos
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM votos")
+        count_votos = c.fetchone()[0]
+        
+        # Lê timestamp do último upload
+        c.execute("SELECT valor FROM config WHERE chave='ultimo_upload_dropbox'")
+        result = c.fetchone()
+        conn.close()
+        
+        # Se não há votos, não precisa fazer upload
+        if count_votos == 0:
+            return False
+        
+        # Se não há timestamp de upload anterior ou está vazio, faz upload
+        if not result or not result[0] or result[0].strip() == '':
+            return upload_db_to_dropbox()
+        
+        # Verifica se passou o intervalo
+        try:
+            ultimo_upload = datetime.fromisoformat(result[0])
+            agora = datetime.now()
+            intervalo = timedelta(minutes=UPLOAD_INTERVAL_MINUTES)
+            
+            if agora - ultimo_upload >= intervalo:
+                return upload_db_to_dropbox()
+        except (ValueError, TypeError):
+            # Se houver erro ao parsear timestamp, faz upload
+            return upload_db_to_dropbox()
+        
+        return False
+    except Exception as e:
+        # Se houver erro, não interrompe a aplicação
         return False
 
 # --- Funções de Estilo e Logo ---
@@ -510,6 +737,9 @@ def validar_eleitor(identificador):
 # --- Interface do Usuário (Front-end) ---
 def main():
     init_db()
+    
+    # Verifica e restaura banco do Google Drive se necessário
+    verificar_e_restaurar_db()
     
     # Extrai cores do logo para aplicar estilo (sem exibir o logo ainda)
     logo_path = encontrar_logo()
