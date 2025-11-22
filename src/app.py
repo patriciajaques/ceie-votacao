@@ -106,6 +106,13 @@ def init_db():
     # Inicializa campo de último upload do Dropbox (se não existir)
     c.execute("INSERT OR IGNORE INTO config (chave, valor) VALUES ('ultimo_upload_dropbox', '')")
     
+    # Inicializa título da votação com valor padrão
+    c.execute("INSERT OR IGNORE INTO config (chave, valor) VALUES ('titulo_votacao', 'Eleição CEIE')")
+    
+    # Inicializa número máximo de seleções com valor padrão de secrets
+    max_selections_default = str(int(st.secrets.get("MAX_SELECTIONS", 3)))
+    c.execute("INSERT OR IGNORE INTO config (chave, valor) VALUES ('max_selections', ?)", (max_selections_default,))
+    
     conn.commit()
     conn.close()
 
@@ -123,6 +130,46 @@ def set_voting_status(new_status):
     
     # Upload imediato para Dropbox ao mudar status
     upload_db_to_dropbox()
+
+def get_titulo_votacao():
+    """Lê título da votação da tabela config, retorna 'Eleição CEIE' como padrão se não existir."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    result = c.execute("SELECT valor FROM config WHERE chave='titulo_votacao'").fetchone()
+    conn.close()
+    if result and result[0]:
+        return result[0]
+    return "Eleição CEIE"
+
+def set_titulo_votacao(titulo):
+    """Salva título da votação na tabela config."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)", ('titulo_votacao', titulo))
+    conn.commit()
+    conn.close()
+
+def get_max_selections():
+    """Lê número máximo de seleções da tabela config, retorna valor de st.secrets como fallback."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    result = c.execute("SELECT valor FROM config WHERE chave='max_selections'").fetchone()
+    conn.close()
+    if result and result[0]:
+        try:
+            return int(result[0])
+        except (ValueError, TypeError):
+            pass
+    # Fallback para secrets
+    return int(st.secrets.get("MAX_SELECTIONS", 3))
+
+def set_max_selections(max_selections):
+    """Salva número máximo de seleções na tabela config."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)", ('max_selections', str(max_selections)))
+    conn.commit()
+    conn.close()
 
 def registrar_voto(user_id, escolhas_lista):
     conn = sqlite3.connect(DB_FILE)
@@ -834,7 +881,8 @@ def exibir_logo(mostrar_titulo=False, cor_primaria='#1f77b4'):
             with col2:
                 st.markdown('<div class="logo-container">', unsafe_allow_html=True)
                 if mostrar_titulo:
-                    st.markdown(f'<h1 style="text-align: center; margin-bottom: 1rem; color: {cor_primaria};">Eleicao CG CEIE</h1>', unsafe_allow_html=True)
+                    titulo = get_titulo_votacao()
+                    st.markdown(f'<h1 style="text-align: center; margin-bottom: 1rem; color: {cor_primaria};">{titulo}</h1>', unsafe_allow_html=True)
                 st.image(img, width='stretch')
                 st.markdown('</div>', unsafe_allow_html=True)
             return logo_path
@@ -1053,8 +1101,7 @@ def main():
                 
                 # Exibe a lista formatada
                 for posicao, (_, row) in enumerate(df_ranking.iterrows(), start=1):
-                    medalha = "🥇" if posicao == 1 else "🥈" if posicao == 2 else "🥉" if posicao == 3 else f"{posicao}º"
-                    st.markdown(f"{medalha} **{row['Candidato']}** - **{row['Votos']}** voto(s)")
+                    st.markdown(f"{posicao}º **{row['Candidato']}** - **{row['Votos']}** voto(s)")
                 
                 # Download dos dados
                 col_dl1, col_dl2 = st.columns(2)
@@ -1083,6 +1130,29 @@ def main():
             # Seção Nova Votação
             st.subheader("🔄 Nova Votação")
             st.info("⚠️ **Atenção:** Ao iniciar uma nova votação, será feito backup automático dos dados atuais (CSV de votos e banco de dados) com data/hora. Todos os votos atuais serão deletados.")
+            
+            # Configurações da votação
+            st.markdown("#### ⚙️ Configurações da Votação")
+            titulo_atual = get_titulo_votacao()
+            max_selections_atual = get_max_selections()
+            
+            novo_titulo = st.text_input(
+                "Título da Votação:",
+                value=titulo_atual,
+                help="Título que será exibido na tela de login e no navegador",
+                key="input_titulo_votacao"
+            )
+            
+            novo_max_selections = st.number_input(
+                "Número Máximo de Votos:",
+                min_value=1,
+                max_value=10,
+                value=max_selections_atual,
+                help="Número máximo de candidatos que cada eleitor pode selecionar",
+                key="input_max_selections"
+            )
+            
+            st.markdown("---")
             
             # Opções: Upload de arquivos ou colar texto
             opcao_upload = st.radio(
@@ -1166,6 +1236,11 @@ def main():
                 elif not valido_candidatos:
                     st.error(f"Erro na validação de candidatos: {erro_candidatos}")
                 else:
+                    # Salva configurações antes de resetar
+                    if novo_titulo and novo_titulo.strip():
+                        set_titulo_votacao(novo_titulo.strip())
+                    set_max_selections(int(novo_max_selections))
+                    
                     # Faz reset da votação (backup + deleta votos)
                     if resetar_votacao():
                         # Salva novos CSVs
@@ -1270,7 +1345,8 @@ def main():
                     for opcao in opcoes
                 }
             
-            st.write(f"Selecione até **{MAX_SELECTIONS}** candidatos:")
+            max_selections = get_max_selections()
+            st.write(f"Selecione até **{max_selections}** candidatos:")
             st.write("")  # Espaço em branco
             
             # Cria checkboxes individuais (fora do form para validação em tempo real)
@@ -1296,19 +1372,19 @@ def main():
             num_selecionados = len(escolhas)
             st.write("")  # Espaço em branco
             
-            if num_selecionados > MAX_SELECTIONS:
+            if num_selecionados > max_selections:
                 st.error(
                     f"⚠️ Você selecionou **{num_selecionados}** candidatos, "
-                    f"mas o máximo permitido é **{MAX_SELECTIONS}**. "
+                    f"mas o máximo permitido é **{max_selections}**. "
                     "Por favor, desmarque algumas opções."
                 )
             else:
-                st.info(f"📊 Selecionados: **{num_selecionados}/{MAX_SELECTIONS}**")
+                st.info(f"📊 Selecionados: **{num_selecionados}/{max_selections}**")
             
             st.write("")  # Espaço em branco
             
             # Determina se o botão deve estar desabilitado
-            botao_desabilitado = (num_selecionados == 0 or num_selecionados > MAX_SELECTIONS)
+            botao_desabilitado = (num_selecionados == 0 or num_selecionados > max_selections)
             
             # Botão de confirmação (sem form - apenas clique)
             if st.button(
@@ -1318,10 +1394,10 @@ def main():
             ):
                 if len(escolhas) == 0:
                     st.warning("Por favor, selecione ao menos um candidato.")
-                elif len(escolhas) > MAX_SELECTIONS:
+                elif len(escolhas) > max_selections:
                     st.error(
                         f"Você selecionou {len(escolhas)} candidatos, "
-                        f"mas o máximo permitido é {MAX_SELECTIONS}. "
+                        f"mas o máximo permitido é {max_selections}. "
                         "Por favor, desmarque algumas opções e tente novamente."
                     )
                 else:
