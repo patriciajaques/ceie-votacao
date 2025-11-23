@@ -31,6 +31,16 @@
 3. Em **"Generated access token"**, clique em **"Generate"**
 4. **Copie o token gerado** (ele só aparece uma vez!)
 
+**⚠️ Importante sobre Expiração de Tokens:**
+- Tokens gerados diretamente no console podem expirar após algum tempo
+- Se o token expirar, você verá uma mensagem de erro no app
+- Para gerar um novo token: volte ao Passo 3 e clique em **"Regenerate"** ou **"Generate"**
+- Atualize o token em dois lugares:
+  1. Arquivo local: `.streamlit/secrets.toml`
+  2. Streamlit Cloud: Settings → Secrets
+
+**💡 Dica:** Para evitar expiração frequente, considere implementar refresh tokens (requer OAuth flow completo).
+
 ### Passo 4: Criar Pasta no Dropbox (Opcional)
 
 A pasta pode ser criada manualmente ou será criada automaticamente no primeiro upload (se o app tiver permissão).

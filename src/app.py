@@ -417,13 +417,25 @@ def init_dropbox_client():
         # Testa a conexão
         client.users_get_current_account()
         return client
-    except AuthError:
-        if 'st.error' in dir():
-            st.error("Erro de autenticação do Dropbox. Verifique o ACCESS_TOKEN.")
+    except AuthError as e:
+        # Verifica se é erro de token expirado
+        error_msg = str(e)
+        if 'expired' in error_msg.lower() or 'expired_access_token' in error_msg:
+            if 'st.error' in dir():
+                st.error("⚠️ **Token do Dropbox expirado!** Gere um novo token no Dropbox Developer Console e atualize os secrets.")
+            else:
+                print("⚠️ Token do Dropbox expirado! Gere um novo token no Dropbox Developer Console.")
+        else:
+            if 'st.error' in dir():
+                st.error("Erro de autenticação do Dropbox. Verifique o ACCESS_TOKEN.")
+            else:
+                print(f"Erro de autenticação do Dropbox: {e}")
         return None
     except Exception as e:
         if 'st.error' in dir():
             st.error(f"Erro ao inicializar Dropbox: {e}")
+        else:
+            print(f"Erro ao inicializar Dropbox: {e}")
         return None
 
 def upload_db_to_dropbox():
@@ -467,6 +479,27 @@ def upload_db_to_dropbox():
         conn.close()
         
         return True
+    except AuthError as e:
+        # Erro de autenticação (token expirado ou inválido)
+        error_msg = str(e)
+        if 'expired' in error_msg.lower() or 'expired_access_token' in error_msg:
+            if 'st.error' in dir():
+                st.error("⚠️ **Token do Dropbox expirado!** Gere um novo token no Dropbox Developer Console e atualize os secrets.")
+            else:
+                print("⚠️ Token do Dropbox expirado! Gere um novo token no Dropbox Developer Console.")
+        else:
+            if 'st.error' in dir():
+                st.error(f"Erro de autenticação do Dropbox: {e}")
+            else:
+                print(f"Erro de autenticação do Dropbox: {e}")
+        return False
+    except ApiError as e:
+        # Erro da API do Dropbox
+        if 'st.error' in dir():
+            st.error(f"Erro da API do Dropbox: {e}")
+        else:
+            print(f"Erro da API do Dropbox: {e}")
+        return False
     except Exception as e:
         if 'st.error' in dir():
             st.error(f"Erro ao fazer upload para Dropbox: {e}")
